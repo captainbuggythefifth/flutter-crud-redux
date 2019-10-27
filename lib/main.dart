@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 
 import 'package:flutter_redux/flutter_redux.dart';
 import 'package:redux/redux.dart';
+import 'package:redux_dev_tools/redux_dev_tools.dart';
+import 'package:flutter_redux_dev_tools/flutter_redux_dev_tools.dart';
 
 import 'package:crud_redux/model/model.dart';
 import 'package:crud_redux/redux/actions.dart';
 import 'package:crud_redux/redux/reducers.dart';
+import 'package:crud_redux/redux/middleware.dart';
 
 void main() => runApp(MyApp());
 
@@ -13,10 +16,10 @@ class MyApp extends StatelessWidget {
   // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
-    final Store<AppState> store = Store<AppState>(
-      appStateReducer,
-      initialState: AppState.initialState(),
-    );
+    final DevToolsStore<AppState> store = DevToolsStore<AppState>(
+        appStateReducer,
+        initialState: AppState.initialState(),
+        middleware: appStateMiddleware());
     return StoreProvider<AppState>(
       store: store,
       child: MaterialApp(
@@ -33,14 +36,21 @@ class MyApp extends StatelessWidget {
           // is not restarted.
           primarySwatch: Colors.blue,
         ),
-        home: MyHomePage(title: 'Flutter Demo Home Page'),
+        home: StoreBuilder<AppState>(
+          onInit: (store) => store.dispatch(GetItemsAction()),
+          builder: (BuildContext context, Store<AppState> store) =>
+              MyHomePage(store: store, title: 'Flutter Demo Home Page'),
+        ),
       ),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key, this.title}) : super(key: key);
+class MyHomePage extends StatelessWidget {
+  final DevToolsStore<AppState> store;
+  final String title;
+
+  MyHomePage({Key key, this.title, this.store}) : super(key: key);
 
   // This widget is the home page of your application. It is stateful, meaning
   // that it has a State object (defined below) that contains fields that affect
@@ -51,26 +61,6 @@ class MyHomePage extends StatefulWidget {
   // used by the build method of the State. Fields in a Widget subclass are
   // always marked "final".
 
-  final String title;
-
-  @override
-  _MyHomePageState createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     // This method is rerun every time setState is called, for instance as done
@@ -80,22 +70,25 @@ class _MyHomePageState extends State<MyHomePage> {
     // fast, so that you can just rebuild anything that needs updating rather
     // than having to individually change instances of widgets.
     return Scaffold(
-        appBar: AppBar(
-          // Here we take the value from the MyHomePage object that was created by
-          // the App.build method, and use it to set our appbar title.
-          title: Text(widget.title),
+      appBar: AppBar(
+        // Here we take the value from the MyHomePage object that was created by
+        // the App.build method, and use it to set our appbar title.
+        title: Text(this.title),
+      ),
+      body: StoreConnector<AppState, _ViewModel>(
+        converter: (Store<AppState> store) => _ViewModel.create(store),
+        builder: (BuildContext context, _ViewModel viewModel) => Column(
+          children: <Widget>[
+            AddItemWidget(viewModel),
+            Expanded(child: ItemListWidget(viewModel)),
+            RemoveItemsButton(viewModel)
+          ],
         ),
-        body: StoreConnector<AppState, _ViewModel>(
-          converter: (Store<AppState> store) => _ViewModel.create(store),
-          builder: (BuildContext context, _ViewModel viewModel) => Column(
-            children: <Widget>[
-              AddItemWidget(viewModel),
-              Expanded(child: ItemListWidget(viewModel)),
-              RemoveItemsButton(viewModel)
-            ],
-          ),
-        ) // This trailing comma makes auto-formatting nicer for build methods.
-      );
+      ),
+      drawer: Container(
+        child: ReduxDevTools(store),
+      ),
+    );
   }
 }
 
@@ -104,20 +97,18 @@ class AddItemWidget extends StatefulWidget {
 
   AddItemWidget(this.model);
 
-  @override 
+  @override
   _AddItemState createState() => _AddItemState();
 }
 
 class _AddItemState extends State<AddItemWidget> {
   final TextEditingController controller = TextEditingController();
 
-  @override 
+  @override
   Widget build(BuildContext context) {
     return TextField(
       controller: controller,
-      decoration: InputDecoration(
-        hintText: 'Add An Item'
-      ),
+      decoration: InputDecoration(hintText: 'Add An Item'),
       onSubmitted: (String s) {
         widget.model.onAddItem(s);
         controller.text = '';
@@ -131,16 +122,24 @@ class ItemListWidget extends StatelessWidget {
 
   ItemListWidget(this.model);
 
-  @override 
+  @override
   Widget build(BuildContext context) {
     return ListView(
-      children: model.items.map((Item item) => ListTile(
-          title: Text(item.body),
-          leading: IconButton(
-            icon: Icon(Icons.delete),
-            onPressed: () => model.onRemoveItem(item),
-          ),
-        )).toList(),  
+      children: model.items
+          .map((Item item) => ListTile(
+                title: Text(item.body),
+                leading: IconButton(
+                  icon: Icon(Icons.delete),
+                  onPressed: () => model.onRemoveItem(item),
+                ),
+                trailing: Checkbox(
+                  value: item.completed,
+                  onChanged: (b) {
+                    model.onCompleted(item);
+                  },
+                ),
+              ))
+          .toList(),
     );
   }
 }
@@ -150,7 +149,7 @@ class RemoveItemsButton extends StatelessWidget {
 
   RemoveItemsButton(this.model);
 
-  @override 
+  @override
   Widget build(BuildContext context) {
     return RaisedButton(
       child: Text('Delete All Items'),
@@ -161,12 +160,17 @@ class RemoveItemsButton extends StatelessWidget {
 
 class _ViewModel {
   final List<Item> items;
+  final Function(Item) onCompleted;
   final Function(String) onAddItem;
   final Function(Item) onRemoveItem;
   final Function() onRemoveItems;
 
   _ViewModel(
-      {this.items, this.onAddItem, this.onRemoveItem, this.onRemoveItems});
+      {this.items,
+      this.onCompleted,
+      this.onAddItem,
+      this.onRemoveItem,
+      this.onRemoveItems});
 
   factory _ViewModel.create(Store<AppState> store) {
     _onAddItem(String body) {
@@ -181,8 +185,13 @@ class _ViewModel {
       store.dispatch(RemoveItemsAction());
     }
 
+    _onCompleted(Item item) {
+      store.dispatch(ItemCompletedAction(item));
+    }
+
     return _ViewModel(
       items: store.state.items,
+      onCompleted: _onCompleted,
       onAddItem: _onAddItem,
       onRemoveItem: _onRemoveItem,
       onRemoveItems: _onRemoveItems,
